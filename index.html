@@ -1,0 +1,356 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4K HD Drawing Studio</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 20px;
+    background: #101827;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+
+h1 { color: #45d5ff; }
+
+.container {
+    max-width: 950px;
+    margin: auto;
+    padding: 20px;
+    background: #1c2a40;
+    border-radius: 18px;
+}
+
+canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: white;
+    border-radius: 10px;
+    margin: 20px auto;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+button, .upload {
+    background: #079bd5;
+    color: white;
+    border: 0;
+    padding: 13px 18px;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+button:hover, .upload:hover {
+    background: #0874a5;
+}
+
+input { display: none; }
+
+progress {
+    width: 90%;
+    height: 14px;
+    margin-top: 20px;
+    accent-color: #00d5ff;
+}
+
+#status {
+    color: #54dfff;
+    margin: 15px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🎨 4K HD Colour Drawing Studio</h1>
+<p>Ultra-sharp portrait drawing animation</p>
+
+<div class="container">
+
+<label class="upload" for="photo">
+📷 Upload Original Photo
+</label>
+
+<input type="file" id="photo" accept="image/*">
+
+<canvas id="canvas" width="3840" height="3840"></canvas>
+
+<div class="controls">
+<button onclick="startDrawing()">▶ Start</button>
+<button onclick="pauseDrawing()">⏸ Pause</button>
+<button onclick="resetDrawing()">↻ Reset</button>
+<button onclick="downloadImage()">⬇ Download 4K PNG</button>
+</div>
+
+<progress id="progress" value="0" max="100"></progress>
+<div id="status">Upload your photo to begin.</div>
+
+</div>
+
+<script>
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", {
+    alpha: false,
+    willReadFrequently: true
+});
+
+const W = 3840;
+const H = 3840;
+
+let photo = new Image();
+let source = document.createElement("canvas");
+let sctx = source.getContext("2d", {
+    willReadFrequently: true
+});
+
+let strokes = [];
+let position = 0;
+let loaded = false;
+let paused = true;
+let frame = null;
+
+const progress = document.getElementById("progress");
+const status = document.getElementById("status");
+
+function clearCanvas() {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+}
+
+clearCanvas();
+
+// Upload original photo
+document.getElementById("photo").onchange = function(e) {
+
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+
+    photo.onload = function() {
+
+        cancelAnimationFrame(frame);
+
+        source.width = W;
+        source.height = H;
+
+        const scale = Math.min(
+            W / photo.width,
+            H / photo.height
+        );
+
+        const width = photo.width * scale;
+        const height = photo.height * scale;
+
+        const x = (W - width) / 2;
+        const y = (H - height) / 2;
+
+        sctx.fillStyle = "#ffffff";
+        sctx.fillRect(0, 0, W, H);
+
+        sctx.imageSmoothingEnabled = true;
+        sctx.imageSmoothingQuality = "high";
+
+        sctx.drawImage(photo, x, y, width, height);
+
+        generateDrawing();
+
+        loaded = true;
+        position = 0;
+        paused = true;
+
+        clearCanvas();
+        progress.value = 0;
+
+        status.textContent =
+            "4K image prepared. Ready to draw!";
+
+        URL.revokeObjectURL(url);
+    };
+
+    photo.src = url;
+};
+
+function generateDrawing() {
+
+    strokes = [];
+
+    const data = sctx.getImageData(
+        0, 0, W, H
+    ).data;
+
+    // Fine 2-pixel sampling for more detail
+    const spacing = 2;
+
+    for (let y = 1; y < H; y += spacing) {
+
+        for (let x = 1; x < W; x += spacing) {
+
+            const i = (y * W + x) * 4;
+
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+
+            const brightness = (r + g + b) / 3;
+
+            if (brightness > 250) continue;
+
+            // Detect local detail and edges
+            const right = (y * W + x + 2) * 4;
+            const below = ((y + 2) * W + x) * 4;
+
+            const edge =
+                Math.abs(r - data[right]) +
+                Math.abs(g - data[right + 1]) +
+                Math.abs(b - data[right + 2]) +
+                Math.abs(r - data[below]) +
+                Math.abs(g - data[below + 1]) +
+                Math.abs(b - data[below + 2]);
+
+            strokes.push({
+                x, y, r, g, b,
+                edge,
+                size: edge > 70 ? 1.5 : 2.2
+            });
+        }
+    }
+
+    // Draw stronger detail strokes first
+    strokes.sort((a, b) => b.edge - a.edge);
+}
+
+function drawStroke(s) {
+
+    ctx.fillStyle =
+        `rgb(${s.r},${s.g},${s.b})`;
+
+    ctx.fillRect(
+        s.x,
+        s.y,
+        s.size,
+        s.size
+    );
+}
+
+function animate() {
+
+    if (paused || !loaded) return;
+
+    // Smaller batches for smoother animation
+    const batch = 12000;
+
+    const end = Math.min(
+        position + batch,
+        strokes.length
+    );
+
+    while (position < end) {
+        drawStroke(strokes[position]);
+        position++;
+    }
+
+    const percent = Math.round(
+        position / strokes.length * 100
+    );
+
+    progress.value = percent;
+
+    status.textContent =
+        "4K drawing: " + percent + "%";
+
+    if (position < strokes.length) {
+        frame = requestAnimationFrame(animate);
+    } else {
+        status.textContent =
+            "🎉 4K drawing completed!";
+        paused = true;
+    }
+}
+
+function startDrawing() {
+
+    if (!loaded) {
+        status.textContent = "Upload a photo first!";
+        return;
+    }
+
+    if (position >= strokes.length) {
+        status.textContent = "Press Reset to draw again.";
+        return;
+    }
+
+    paused = false;
+    cancelAnimationFrame(frame);
+    animate();
+}
+
+function pauseDrawing() {
+    paused = true;
+    cancelAnimationFrame(frame);
+    status.textContent = "Drawing paused.";
+}
+
+function resetDrawing() {
+    paused = true;
+    cancelAnimationFrame(frame);
+    position = 0;
+    clearCanvas();
+    progress.value = 0;
+
+    status.textContent = loaded
+        ? "Ready to draw again!"
+        : "Upload your photo to begin.";
+}
+
+function downloadImage() {
+
+    if (!loaded) {
+        status.textContent = "Upload a photo first!";
+        return;
+    }
+
+    if (position < strokes.length) {
+        status.textContent =
+            "Complete the drawing before downloading.";
+        return;
+    }
+
+    canvas.toBlob(function(blob) {
+
+        if (!blob) {
+            status.textContent = "Export failed.";
+            return;
+        }
+
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+
+        link.href = url;
+        link.download = "4K-HD-Digital-Drawing.png";
+        link.click();
+
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    }, "image/png");
+
+}
+
+</script>
+</body>
+</html>
